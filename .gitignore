@@ -1,0 +1,22 @@
+# Volúmenes de datos y persistencia
+data/
+**/data/
+*.sqlite
+*.db
+
+# Certificados y secretos
+*.key
+*.pem
+*.crt
+letsencrypt/
+**/letsencrypt/
+
+# Variables de entorno reales con contraseñas
+.env
+*.env.local
+
+# Backups y temporales
+backups/
+*.tar.gz
+*.log
+.DS_Store
