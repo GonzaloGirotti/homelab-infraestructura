@@ -1,154 +1,170 @@
-# homelab-infraestructura
+# 🖥️ Enterprise-Grade Homelab Infrastructure
 
-[![Docker](https://img.shields.io/badge/Docker-24.0+-2496ED?logo=docker&logoColor=white)](https://www.docker.com/)
-[![Docker Compose](https://img.shields.io/badge/Docker_Compose-v2+-2496ED?logo=docker&logoColor=white)](https://docs.docker.com/compose/)
-[![Ubuntu Server](https://img.shields.io/badge/Ubuntu_Server-22.04_LTS-E95420?logo=ubuntu&logoColor=white)](https://ubuntu.com/)
-[![Nginx Proxy Manager](https://img.shields.io/badge/Nginx_Proxy_Manager-2.10+-009639?logo=nginx&logoColor=white)](https://nginxproxymanager.com/)
-[![Prometheus](https://img.shields.io/badge/Prometheus-v2.45+-E6522C?logo=prometheus&logoColor=white)](https://prometheus.io/)
-[![Grafana](https://img.shields.io/badge/Grafana-v10.0+-F46800?logo=grafana&logoColor=white)](https://grafana.com/)
+[![Linux](https://img.shields.io/badge/OS-Ubuntu%20Server%2022.04%2F24.04-E95420?logo=ubuntu&logoColor=white)](https://ubuntu.com/server)
+[![Docker](https://img.shields.io/badge/Container-Docker%20%7C%20Compose-2496ED?logo=docker&logoColor=white)](https://www.docker.com/)
+[![Reverse Proxy](https://img.shields.io/badge/Reverse%20Proxy-Nginx%20Proxy%20Manager-009639?logo=nginx&logoColor=white)](https://nginxproxymanager.com/)
+[![Observability](https://img.shields.io/badge/Metrics-Prometheus%20%2B%20Grafana-F46800?logo=prometheus&logoColor=white)](https://prometheus.io/)
+[![Uptime Monitoring](https://img.shields.io/badge/Availability-Uptime%20Kuma-2AF598?logo=statuspage&logoColor=white)](https://github.com/louislam/uptime-kuma)
+[![Security](https://img.shields.io/badge/Security-Zero%20Trust%20%7C%20UFW%20%7C%20TLS-critical)](#-seguridad-y-perímetro)
 
-Infraestructura contenerizada autoalojada y pila de observabilidad integral desplegada sobre una máquina virtual dedicada con Ubuntu Server. Diseñada bajo principios de **aislamiento de red**, **terminación TLS centralizada** y **mínimo privilegio de puertos expuestos**.
+Infraestructura autoalojada (*Self-Hosted*) diseñada e implementada bajo estándares modernos de la industria SysAdmin y DevOps. Este entorno reproduce una arquitectura productiva de microservicios, segmentación de red L4/L7, terminación TLS centralizada, observabilidad *White-box* & *Black-box*, y políticas de acceso seguro Zero Trust.
 
 ---
 
-## Arquitectura de Red y Servicios
+## 📐 Topología y Arquitectura del Sistema
 
-El tráfico externo hacia los servicios es canalizado a través de una red puente interna (`proxy-net`). Los puertos de las aplicaciones (`9000`, `3000`, etc.) no están enlazados al host (`ports`), sino aislados mediante `expose`, dejando como únicos puntos de entrada los puertos estándar `80` y `443` operados por **Nginx Proxy Manager**.
+El tráfico de red sigue un modelo de proxy inverso con zonas de aislamiento mediante puentes de red virtuales Docker (*Bridge Networks*). Los servicios no exponen puertos arbitrarios al exterior de la VM anfitriona; el tráfico entrante L7 es filtrado y enrutado centralizadamente por el reverse proxy.
 
-```mermaid
-flowchart TD
-    Client[Cliente / Navegador] -->|HTTPS :443| NPM[Nginx Proxy Manager]
-    
-    subgraph Host["Ubuntu Server VM (192.168.1.141)"]
-        subgraph DockerNet["Docker Network: proxy-net"]
-            NPM -->|HTTP :9000| Portainer[Portainer CE]
-            NPM -->|HTTP :3000| Grafana[Grafana]
-            
-            Prometheus[Prometheus TSDB :9090] -->|Scrape :9100| NodeExp[Node Exporter]
-            Prometheus -->|Scrape :8080| cAdvisor[cAdvisor]
-            Grafana -->|PromQL Queries| Prometheus
-        end
-        
-        NodeExp -->|Mount :ro /proc, /sys| Kernel[Linux Kernel]
-        cAdvisor -->|Mount /var/run/docker.sock| DockerEngine[Docker Daemon]
-    end
+```
+                    ┌────────────────────────────────────────────────────────┐
+                    │                   Red Local / Clientes                  │
+                    └───────────────────────────┬────────────────────────────┘
+                                                │ HTTPS (TCP 443) / HTTP (TCP 80)
+                                                ▼
+┌────────────────────────────────────────────────────────────────────────────────────────────┐
+│ Host: Ubuntu Server (192.168.1.141)                                                        │
+│ Firewall (Firewalld): 22 (SSH Clave ED25519), 80 (HTTP), 443 (HTTPS), 81 (NPM Admin)       │
+│                                                                                            │
+│   ┌────────────────────────────────────────────────────────────────────────────────────┐   │
+│   │ Docker Network: proxy-net (Driver: bridge, 172.18.0.0/16)                          │   │
+│   │                                                                                    │   │
+│   │   ┌───────────────────────────────┐                                                │   │
+│   │   │     Nginx Proxy Manager       │ ◄─── Terminación TLS (*.homelab.local)         │   │
+│   │   │   (Reverse Proxy / Gateway)   │ ◄─── Enrutamiento de subdominios               │   │
+│   │   └──────────────┬────────────────┘                                                │   │
+│   │                  │                                                                 │   │
+│   │         ┌────────┴────────────────────────┬────────────────────────┐               │   │
+│   │         ▼ (HTTP Interno)                  ▼ (HTTP Interno)         ▼               │   │
+│   │   ┌──────────────┐                 ┌──────────────┐         ┌──────────────┐       │   │
+│   │   │ Grafana      │                 │ Prometheus   │         │ Uptime Kuma  │       │   │
+│   │   │ (Port 3000)  │                 │ (Port 9090)  │         │ (Port 3001)  │       │   │
+│   │   └──────┬───────┘                 └──────▲───────┘         └──────────────┘       │   │
+│   │          │ Consultas PromQL               │ Métricas TSDB          ▲               │   │
+│   │          └────────────────────────────────┘                        │ Healthchecks  │   │
+│   │                                                                    │ & Heartbeats  │   │
+│   └────────────────────────────────────────────────────────────────────┼───────────────┘   │
+│                                                                        │                   │
+│   ┌────────────────────────────────────────────────────────────────────┼───────────────┐   │
+│   │ Docker Network: monitoring-internal (Driver: bridge)               │                   │   │
+│   │                                                                    │                   │   │
+│   │   ┌───────────────────────────────┐   ┌────────────────────────────┴──┐                │   │
+│   │   │ Node Exporter                 │   │ cAdvisor                      │                │   │
+│   │   │ (Métricas OS / Hardware)      │   │ (Métricas Docker Runtime)     │                │   │
+│   │   │ Port 9100                     │   │ Port 8080                     │                │   │
+│   │   └──────────────▲────────────────┘   └──────────────▲────────────────┘                │   │
+│   │                  │                                   │                                 │   │
+│   └──────────────────┼───────────────────────────────────┼─────────────────────────────────┘   │
+│                      │                                   │                                     │
+│               [ /proc, /sys ]                     [ docker.sock ]                              │
+│                      │                                   │                                     │
+│   ═══════════════════╧═══════════════════════════════════╧═════════════════════════════════   │
+│   Núcleo del Sistema Operativo & Hardware del Servidor                                        │
+└────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-## Componentes del Stack
+---
 
-1. Núcleo de Enrutamiento y Gestión (core)
+## 🗂️ Estructura del Repositorio e Inmutabilidad
 
-    Nginx Proxy Manager: Punto único de entrada (Reverse Proxy) que gestiona la terminación TLS mediante un certificado wildcard autofirmado (*.homelab.local).
+Siguiendo el principio de **desacoplamiento de estado**, el sistema operativo base es completamente descartable. Todo el estado persistente y los manifiestos de despliegue residen de forma jerárquica en `/opt/homelab`:
 
-    Portainer CE: Interfaz visual para la inspección de ciclos de vida de contenedores, volúmenes y redes comunicándose vía Unix Domain Socket (/var/run/docker.sock).
-
-2. Pila de Monitoreo y Métricas (monitoring)
-
-    Node Exporter: Agente a nivel de host que expone métricas de hardware y del kernel de Linux (CPU, saturación I/O, memoria, interfaces de red).
-
-    cAdvisor: Demonio de Google que recopila el uso de recursos y perfiles de rendimiento individual de cada contenedor Docker.
-
-    Prometheus: Base de datos de series temporales (TSDB) configurada para recolectar métricas (scraping) de los exportadores cada 15 segundos.
-
-    Grafana: Motor de visualización analítico conectado a Prometheus con dashboards dinámicos para el sistema anfitrión y los contenedores.
-
-## Estructura del Proyecto
-
-El despliegue está dividido en proyectos de Docker Compose independientes para permitir el mantenimiento y reinicio modular de las pilas sin interrumpir el proxy de tráfico:
-
-```plaintext
-.
-├── core/
-│   └── docker-compose.yml       # NPM y Portainer
-├── monitoring/
-│   ├── docker-compose.yml       # Prometheus, Grafana, Node Exporter, cAdvisor
-│   └── prometheus/
-│       └── prometheus.yml       # Objetivos y frecuencias de scraping
-├── scripts/
-│   └── generate-certs.sh        # Generación de certificados OpenSSL
-└── docs/
-    └── screenshots/             # Capturas de paneles operativos
+```text
+/opt/homelab/
+├── compose/
+│   ├── core/
+│   │   └── docker-compose.yml       # Nginx Proxy Manager + persistencia SQLite/Certs
+│   └── monitoring/
+│       ├── docker-compose.yml       # Prometheus, Grafana, Node Exporter, cAdvisor, Uptime Kuma
+│       └── prometheus/
+│           └── prometheus.yml       # Configuración de scrape targets e intervalos
+└── data/                            # Volúmenes persistentes (Excluidos de Git, integrados a DRP)
+    ├── npm/
+    │   ├── data/
+    │   └── letsencrypt/
+    ├── prometheus/
+    ├── grafana/
+    └── uptime-kuma/
 ```
 
-## Despliegue Rápido (Runbook)
-### Prerrequisitos
-Ubuntu Server con Docker Engine y Docker Compose v2+ instalados. Red Docker compartida creada previamente:
+---
 
+## 🚀 Componentes del Ecosistema
+
+### 1. Núcleo de Enrutamiento y Proxy (Core)
+* **Nginx Proxy Manager (NPM):** Punto de entrada L7 para todo el tráfico web del clúster. 
+  * Manejo de certificados TLS/SSL comodín (*Wildcard*).
+  * Cabeceras de seguridad HTTP, soporte nativo de WebSockets y mitigación de exploits comunes.
+  * Resolución de nombres interna mediante red Docker `proxy-net`.
+
+### 2. Pila de Observabilidad y Telemetría (Monitoring)
+La monitorización se divide en dos paradigmas complementarios:
+
+* **Observabilidad White-box (Métricas Internas):**
+  * **Prometheus:** Servidor de base de datos de series temporales (TSDB) que recopila métricas cada 15s de los exportadores configurados.
+  * **Node Exporter:** Monitoreo a nivel de kernel y host (utilización de CPU, saturación de RAM, I/O de disco, métricas de red `netstat`, carga de sistema).
+  * **cAdvisor:** Monitoreo del daemon de Docker para extraer métricas de límites de recursos, consumo de memoria y uso de CPU por contenedor individual.
+  * **Grafana:** Visualización centralizada mediante cuadros de mando interactivos aprovisionados automáticamente.
+* **Observabilidad Black-box (Disponibilidad Externa):**
+  * **Uptime Kuma:** Monitorización sintética de latencia, estados HTTP/HTTPS, expiración de certificados TLS y soporte de monitores tipo *Dead Man's Switch* (Push/Heartbeat) para tareas periódicas programadas.
+
+---
+
+## 🛡️ Seguridad y Perímetro (*Hardening*)
+
+1. **Firewall Perimetral (Firewalld):**
+   * Puertos expuestos estrictamente necesarios:
+     * `22/tcp`: SSH limitado exclusivamente a autenticación por llave criptográfica pública (`ed25519`). Autenticación por contraseña deshabilitada.
+     * `80/tcp` y `443/tcp`: Ingress de tráfico para el proxy inverso.
+     * `81/tcp`: Panel de administración web de NPM (restringido a red local de gestión).
+2. **Aislamiento de Contenedores:**
+   * Los contenedores internos (Prometheus, cAdvisor, Node Exporter) no exponen puertos al exterior en el host (`0.0.0.0`), interactuando únicamente a través de la red privada `proxy-net` o la red local de monitorización.
+3. **Control de Acceso y DNS Local:**
+   * Resolución de dominios privados bajo la zona `.homelab.local` mediante mapeo estático y filtrado de cabeceras Host para mitigar ataques de *DNS Rebinding*.
+
+---
+
+## 📦 Puesta en Marcha (Deployment)
+
+### Requisitos Previos
+* Ubuntu Server (20.04 LTS o superior).
+* Docker Engine (>= 24.0) y Docker Compose Plugin (>= 2.20).
+* Llave SSH aprovisionada en el servidor.
+
+### 1. Inicialización de Redes Docker
+Antes de iniciar los servicios, se debe crear la red puente compartida:
 ```bash
 docker network create proxy-net
 ```
 
-## 1. Certificados SSL Locales (Wildcard)
-   Genere la clave privada y el certificado X.509 autofirmado para cubrir todos los subdominios de la red local:
-
+### 2. Despliegue de la Capa Core (Nginx Proxy Manager)
 ```bash
-   openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
-  -keyout ./certs/homelab.key \
-  -out ./certs/homelab.crt \
-  -subj "/CN=*.homelab.local"
+cd /opt/homelab/compose/core
+docker compose up -d
 ```
+Acceder al panel de administración en `http://192.168.1.141:81` y configurar credenciales iniciales.
 
-## 2. Despliegue de Servicios
-Levantar la pila de gestión y proxy inverso:
-
+### 3. Despliegue de la Pila de Monitorización
 ```bash
-cd core
+cd /opt/homelab/compose/monitoring
 docker compose up -d
 ```
 
-Configurar los permisos del volumen de almacenamiento de Grafana e iniciar la pila de observabilidad:
-
+Validar que los contenedores se encuentren en estado *healthy* / *running*:
 ```bash
-cd ../monitoring
-sudo chown -R 472:472 ./grafana/data
-sudo chmod -R 775 ./grafana/data
-docker compose up -d
+docker ps --format "table {{.Names}}	{{.Status}}	{{.Ports}}"
 ```
 
-## 5. Resolución DNS Local
-En el equipo cliente (estación de trabajo), agregue las entradas al archivo /etc/hosts (o C:\Windows\System32\drivers\etc\hosts en Windows):
+---
 
-```plaintext
-192.168.1.141 npm.homelab.local portainer.homelab.local grafana.homelab.local
-```
+## 📊 Dashboards y Métricas Clave
 
-## 6. Configuración del Reverse Proxy
-Desde la interfaz de Nginx Proxy Manager (http://192.168.1.141:81), instale el certificado en SSL Certificates > Custom y configure los siguientes Proxy Hosts:
+| Servicio                | Puerto Interno      | Endpoint / Uso                                 |
+| ----------------------- | ------------------- | ---------------------------------------------- |
+| **Nginx Proxy Manager** | `81` / `80` / `443` | Gateway de entrada y gestión SSL               |
+| **Grafana**             | `3000`              | Visualización (`dashboards/host-metrics.json`) |
+| **Prometheus**          | `9090`              | Motor de recolección de métricas TSDB          |
+| **Uptime Kuma**         | `3001`              | Monitor de SLA, disponibilidad y certificados  |
+| **Node Exporter**       | `9100`              | Recolector de métricas de host (Kernel/OS)     |
+| **cAdvisor**            | `8080`              | Recolector de rendimiento de contenedores      |
 
-**Dominio**: portainer.homelab.local	          **Esquema**: http	   **Host de reenvío**: portainer	        **Puerto**: 9000	      **Opciones**: Websockets, Force SSL
-
-**Dominio**: grafana.homelab.local	            **Esquema**: http	  **Host de reenvío**: grafana	          **Puerto**: 3000	      **Opciones**: Websockets, Force SSL
-
-## Resolución de Incidentes y Lecciones Aprendidas
-
-Esta sección recopila los problemas técnicos reales encontrados durante la fase de despliegue e integración:
-1. Conflicto de enlaces en puertos 80/443 (Apache vs Docker Proxy)
-
-    Incidente: Al acceder al servidor, el navegador devolvía la página predeterminada de Apache ("Apache2 Ubuntu Default Page") en lugar de Nginx Proxy Manager.
-
-    Diagnóstico: Inspección de sockets abiertos con sudo ss -tulpn | grep -E ':(80|443)\s', revelando que el demonio apache2 estaba activo en el sistema host escuchando en todas las interfaces (0.0.0.0:*), impidiendo a Docker enlazar los puertos.
-
-    Mitigación: Parada, deshabilitación y purga completa del servicio Apache en la máquina anfitriona para asegurar que únicamente docker-proxy gestione la entrada de tráfico web:
-
-```bash
-sudo systemctl stop apache2 && sudo systemctl disable apache2
-sudo apt purge -y apache2 apache2-bin
-```
-
-## 2. Fallo de arranque y HTTP 502 Bad Gateway en Grafana
-
-  Incidente: Nginx Proxy Manager no lograba establecer conexión con el backend de Grafana, respondiendo con un error HTTP 502.
-
-  Diagnóstico: El comando docker ps -a reportó a Grafana en estado Restarting (1). El análisis de registros mediante docker logs grafana --tail 30 indicó un fallo crítico: GF_PATHS_DATA='/var/lib/grafana' is not writable: Permission denied.
-
-  Causa Raíz: El contenedor oficial de Grafana corre bajo un usuario sin privilegios de root con UID predeterminado 472. El volumen local montado fue creado inicialmente por el usuario del sistema anfitrión, bloqueando el acceso de escritura.
-
-  Mitigación: Ajuste recursivo de propiedad sobre el directorio persistente (sudo chown -R 472:472 ./grafana/data), normalizando el estado a Up de forma estable.
-
-## Dashboards de Grafana Recomendados
-
-Una vez conectado Prometheus como DataSource (http://prometheus:9090), importe los siguientes identificadores de dashboard oficiales:
-
-  Node Exporter Full (ID: 1860): Monitoreo detallado de recursos del sistema host (CPU, memoria por tipo, IOPS y operaciones de disco, métricas de interfaces de red).
-
-  cAdvisor Docker Monitoring (ID: 14282): Métricas desglosadas por contenedor individual (límites de memoria, uso de CPU por núcleo, errores de red).
+---
